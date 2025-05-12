@@ -20,8 +20,9 @@ import java.util.Date;
 
 public class Main {
     public static Map<String, Object> dataMap;
+
     public static void main(String[] args) {
-        String inputFilePath = "MergeDocs\\TestMerge.docx";
+        String inputFilePath = "TestMerge.docx";
         String outputFilePath = "output_merged.docx";
         String tagToReplace = "{{TestMerge}}";
         String replacementText = "Hello World";
@@ -39,7 +40,7 @@ public class Main {
                 "  \"data\": {" +
                 "    \"Matter\": {" +
                 "      \"Status\": \"Open\"," +
-                "       \"Client\": {\"Birthday\": \"2024-01-01\"},"+
+                "       \"Client\": {\"Birthday\": \"2024-01-01\"}," +
                 "      \"Handling_attorney\": {" +
                 "        \"Name\": \"Handling ATORNEY\"," +
                 "        \"signature\": \"https://example.com\"" +
@@ -81,32 +82,32 @@ public class Main {
                 "    \"Louisiana\": false" +
                 "  }" +
                 "}";
-            Gson gson = new Gson();
-            Type type = new TypeToken<Map<String, Object>>() {}.getType();
-            Map<String, Object> jsonMap = gson.fromJson(json, type);
-            dataMap = (Map<String, Object>) jsonMap.get("data");
+        Gson gson = new Gson();
+        Type type = new TypeToken<Map<String, Object>>() {
+        }.getType();
+        Map<String, Object> jsonMap = gson.fromJson(json, type);
+        dataMap = (Map<String, Object>) jsonMap.get("data");
         try {
             XWPFDocument document = readDocxFile(inputFilePath);
 
             if (document != null) {
 
-
                 // Replace tag in headers
                 for (XWPFHeader header : document.getHeaderList()) {
                     for (XWPFParagraph paragraph : header.getParagraphs()) {
-                        mergeTagInParagraph(paragraph, tagToReplace, headerReplacementText);
+                        mergeTagInParagraph(paragraph);
                     }
                 }
 
                 // Replace tag in main document paragraphs
                 for (XWPFParagraph paragraph : document.getParagraphs()) {
-                    mergeTagInParagraph(paragraph, tagToReplace, replacementText);
+                    mergeTagInParagraph(paragraph);
                 }
 
                 // Replace tag in footers
                 for (XWPFFooter footer : document.getFooterList()) {
                     for (XWPFParagraph paragraph : footer.getParagraphs()) {
-                        mergeTagInParagraph(paragraph, tagToReplace, footerReplacementText);
+                        mergeTagInParagraph(paragraph);
                     }
                 }
 
@@ -157,87 +158,96 @@ public class Main {
 
     }
 
-    public static void mergeTagInParagraph(XWPFParagraph paragraph, String tag, String replacement) {
+    public static void mergeTagInParagraph(XWPFParagraph paragraph) {
         List<XWPFRun> runs = paragraph.getRuns();
         StringBuilder paragraphText = new StringBuilder();
         int tagStartIndex = -1;
         int tagEndIndex = -1;
         int firstTagRunIndex = -1;
         int lastTagRunIndex = -1;
+        Pattern pattern = Pattern.compile("\\{\\{(.*?)\\}\\}"); // Correct Pattern
+        Matcher matcher = null;
 
-        //initialize pattern and matcher
-
-        // First pass: Find the tag and the indices of the runs it spans
-        for (int i = 0; i < runs.size(); i++) {
-            XWPFRun run = runs.get(i);
+        // Build the complete paragraph text first. This is crucial for correct
+        // matching.
+        for (XWPFRun run : runs) {
             String runText = run.getText(0) == null ? "" : run.getText(0);
             paragraphText.append(runText);
-            int endIndexInParagraph = paragraphText.length();
-            Pattern pattern = Pattern.compile("\\{\\{(.*?)\\}\\}");
+        }
+        String paragraphTextStr = paragraphText.toString(); // Store as String for efficiency
 
-            Matcher matcher = pattern.matcher(paragraphText);
+        matcher = pattern.matcher(paragraphTextStr); // Create matcher with full text
 
-            //find paragraph text
-            while(matcher.find()){
-                String tagWithBraces = matcher.group(0);
+        // Iterate through each match found in the paragraph
+        while (matcher.find()) {
+            String tagWithBraces = matcher.group(0);
+            String tagBody = matcher.group(1);
+            String replacement = (String) getNestedValue(dataMap, tagBody); // Get replacement value.
 
-                if (tagStartIndex == -1 && paragraphText.toString().contains(tagWithBraces)) {
-                    tagStartIndex = paragraphText.indexOf(tagWithBraces);
+            tagStartIndex = matcher.start();
+            tagEndIndex = matcher.end();
+
+            // Find the runs that contain the tag. This logic is now correct.
+            firstTagRunIndex = 0;
+            int currentRunLength = 0;
+            for (int i = 0; i < runs.size(); i++) {
+                XWPFRun run = runs.get(i);
+                String runText = run.getText(0) == null ? "" : run.getText(0);
+                int runTextLength = runText.length();
+
+                if (tagStartIndex >= currentRunLength && tagStartIndex < currentRunLength + runTextLength) {
                     firstTagRunIndex = i;
-                    System.out.println("Tag Start Index" + tagStartIndex);
-                    System.out.println("Found Tag: "+ tagWithBraces);
-                    System.out.println("Tag Name:" + matcher.group(1));
+                    break; // Found the first run
                 }
-                if (tagStartIndex != -1 && endIndexInParagraph >= tagStartIndex + tagWithBraces.length() && lastTagRunIndex == -1) {
+                currentRunLength += runTextLength;
+            }
+
+            lastTagRunIndex = runs.size() - 1;
+            currentRunLength = paragraphTextStr.length();
+            for (int i = runs.size() - 1; i >= 0; i--) {
+                XWPFRun run = runs.get(i);
+                String runText = run.getText(0) == null ? "" : run.getText(0);
+                int runTextLength = runText.length();
+                currentRunLength -= runTextLength;
+                if (tagEndIndex > currentRunLength && tagEndIndex <= currentRunLength + runTextLength) {
                     lastTagRunIndex = i;
-                    tagEndIndex = tagStartIndex + tagWithBraces.length();
-                }
-
-                //replace tag
-                String tagBody = matcher.group(1);
-                String newReplacement = (String) getNestedValue(dataMap, tagBody);
-                if (tagStartIndex != -1) {
-                    System.err.println("Start Merge Replacement");
-                    // Store the formatting of the *first* run of the tag
-                    XWPFRun formattingSourceRun = null;
-                    if (firstTagRunIndex >= 0 && firstTagRunIndex < runs.size()) {
-                        formattingSourceRun = runs.get(firstTagRunIndex);
-                    }
-
-                    // Create a new run for the replacement with the formatting of the first tag run
-                    XWPFRun replacementRun = paragraph.createRun();
-                    if (formattingSourceRun != null) {
-                        copyRunFormatting(formattingSourceRun, replacementRun);
-                    }
-                    replacementRun.setText(newReplacement);
-                    System.err.println("Replacement Text" + replacementRun.text());
-                    // Remove the runs that contained the tag (iterate in reverse)
-                    for (int j = runs.size() - 1; j >= 0; j--) {
-                        if (j >= firstTagRunIndex && j <= lastTagRunIndex) {
-                            paragraph.removeRun(j);
-                        }
-                    }
-
-                    // Insert the replacement run at the position of the first tag run
-                    List<XWPFRun> currentRuns = paragraph.getRuns();
-                    if (firstTagRunIndex <= currentRuns.size()) {
-                        paragraph.addRun( replacementRun);
-                    } else {
-                        paragraph.addRun(replacementRun); // Add at the end if index is out of bounds (shouldn't happen)
-                    }
+                    break;
                 }
             }
-        }
+            // Store formatting of the first run.
+            XWPFRun formattingSourceRun = runs.get(firstTagRunIndex);
 
+            // Create a new run for the replacement.
+            XWPFRun replacementRun = paragraph.createRun();
+            copyRunFormatting(formattingSourceRun, replacementRun); // Copy formatting
+            replacementRun.setText(replacement);
+
+            // Remove the runs containing the tag, in reverse order to avoid index issues.
+            for (int i = lastTagRunIndex; i >= firstTagRunIndex; i--) {
+                paragraph.removeRun(i);
+            }
+            // Insert the replacement run.
+            paragraph.insertNewRun(firstTagRunIndex);
+            runs = paragraph.getRuns();
+            try {
+                runs.set(firstTagRunIndex, replacementRun);
+
+            } catch (Exception e) {
+                // TODO: handle exception
+                System.err.println("error setting replacement run " + e.getMessage());
+            }
+
+        }
     }
 
-    //Process standard tags
+    // Process standard tags
     public static Object getNestedValue(Map<String, Object> data, String path) {
         List<String> keys = Arrays.asList(path.split("\\."));
         return getNestedValueRecursive(data, keys, 0, path);
     }
 
-    private static Object getNestedValueRecursive(Map<String, Object> currentLevel, List<String> keys, int index, String path) {
+    private static Object getNestedValueRecursive(Map<String, Object> currentLevel, List<String> keys, int index,
+            String path) {
         if (currentLevel == null || index >= keys.size()) {
             System.err.println("Invalid path or null map at index: " + index);
             return null; // Return null if the path is invalid
@@ -248,7 +258,7 @@ public class Main {
 
         if (value == null) {
             System.err.println("Key not found: " + currentKey);
-            return "{{"+path+"}}"; // Key not found
+            return "{{" + path + "}}"; // Key not found
         }
 
         if (index == keys.size() - 1) {
@@ -268,12 +278,10 @@ public class Main {
                         currentKey);
                 return null;
             }
-        }else  {
+        } else {
             System.err.println("Intermediate value is not a map or list for key: " +
                     currentKey);
             return null; // Path not found or intermediate level is not a map or list
         }
     }
 }
-
-

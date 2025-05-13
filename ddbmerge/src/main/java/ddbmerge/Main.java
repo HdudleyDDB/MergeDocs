@@ -11,12 +11,13 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.text.SimpleDateFormat;
-import java.util.Date;
+// import java.text.SimpleDateFormat;
+// import java.util.Date;
 
 public class Main {
     public static Map<String, Object> dataMap;
@@ -24,10 +25,6 @@ public class Main {
     public static void main(String[] args) {
         String inputFilePath = "TestMerge.docx";
         String outputFilePath = "output_merged.docx";
-        String tagToReplace = "{{TestMerge}}";
-        String replacementText = "Hello World";
-        String headerReplacementText = "Header Text";
-        String footerReplacementText = "Footer Text";
         dataMap = new HashMap<>();
         String json = "{" +
                 "  \"filePath\": {" +
@@ -94,20 +91,34 @@ public class Main {
 
                 // Replace tag in headers
                 for (XWPFHeader header : document.getHeaderList()) {
+                    // process Header tables
+                    for (XWPFTable table : header.getTables()) {
+                        processTable(table);
+                    }
+                    // process Header paragraphs
                     for (XWPFParagraph paragraph : header.getParagraphs()) {
-                        mergeTagInParagraph(paragraph);
+                        mergeTagInParagraph(paragraph, dataMap);
                     }
                 }
 
                 // Replace tag in main document paragraphs
                 for (XWPFParagraph paragraph : document.getParagraphs()) {
-                    mergeTagInParagraph(paragraph);
+                    mergeTagInParagraph(paragraph, dataMap);
+                }
+
+                // process Document tables
+                for (XWPFTable table : document.getTables()) {
+                    processTable(table);
                 }
 
                 // Replace tag in footers
                 for (XWPFFooter footer : document.getFooterList()) {
                     for (XWPFParagraph paragraph : footer.getParagraphs()) {
-                        mergeTagInParagraph(paragraph);
+                        mergeTagInParagraph(paragraph, dataMap);
+                    }
+                    // process Footer tables
+                    for (XWPFTable table : footer.getTables()) {
+                        processTable(table);
                     }
                 }
 
@@ -143,6 +154,121 @@ public class Main {
         }
     }
 
+    private static void processTable(XWPFTable table) {
+        List<XWPFTableRow> tableRows = table.getRows();
+        // look for replication values
+        if (tableRows != null) {
+            int rowIndex = 0;
+            for (XWPFTableRow tableRow : tableRows) {
+                List<XWPFTableCell> tableCells = tableRow.getTableCells();
+                if (tableCells != null) {
+                    XWPFTableCell firstCell = tableCells.get(0);
+                    List<XWPFParagraph> firstCellParagraphs = firstCell.getParagraphs();
+                    if (firstCellParagraphs != null) {
+                        XWPFParagraph firstCellParagraph = firstCellParagraphs.get(0);
+                        StringBuilder cellText = new StringBuilder();
+                        for (XWPFRun run : firstCellParagraph.getRuns()) {
+                            cellText.append(run.getText(0));
+                        }
+                        System.out.println("First Cell Text: " + cellText.toString());
+                        // search for replicate row tag
+
+                        Pattern pattern = Pattern.compile("\\{\\{startRow.(.*?)\\}\\}");
+                        Matcher matcher = pattern.matcher(cellText.toString());
+                        while (matcher.find()) {
+                            int tagStartIndex = -1;
+                            int tagEndIndex = -1;
+                            int firstTagRunIndex = -1;
+                            int lastTagRunIndex = -1;
+                            // run matcher to get the row
+                            String startRowKey = null;
+                            startRowKey = matcher.group(1);
+                            if (startRowKey != null) {
+                                List<XWPFTableRow> rowsToAdd = new ArrayList<>();
+                                List<String> repeatKeys = Arrays.asList(startRowKey.split("\\."));
+                                List<Map<String, Object>> repeatMap = (List<Map<String, Object>>) getNestedValueList(
+                                        dataMap,
+                                        repeatKeys, 0);
+                                // working up to this point
+
+                                // loop over the list to get the map of values and add to row
+                                for (Map<String, Object> repeatMapEntry : repeatMap) {
+                                    XWPFTableRow rowToCreate = tableRow;
+                                    // loop over table row cells to replace values
+                                    for (XWPFTableCell replciateRowCell : rowToCreate.getTableCells()) {
+                                        // loop over table row cell paragraphs and merge values
+                                        for (XWPFParagraph replicateRowCellParagraph : replciateRowCell
+                                                .getParagraphs()) {
+                                            mergeTagInParagraph(replicateRowCellParagraph, repeatMapEntry);
+                                        }
+                                    }
+                                    rowsToAdd.add(rowToCreate);
+
+                                }
+
+                                // List<Map<String,Object>> listMap = dataMap.get()
+
+                                System.out.println("Found Start Tag: " + startRowKey);
+                                System.out.println("Row index at removal " + rowIndex);
+                                // remove template replicate row
+                                table.removeRow(rowIndex);
+
+                                // reversely add row (maintain sort order)
+                                // for (int i = rowsToAdd.size() - 1; i >= 0; i--) {
+                                // try {
+                                // table.addRow(tableRow, rowIndex);
+
+                                // } catch (Exception e) {
+                                // // TODO: handle exception
+                                // System.err.println("Error adding rows: " + e.getMessage());
+                                // }
+
+                                // }
+
+                            }
+                            // String rowMapKey = dataMap.get()
+                            // Map<String, Object> rowMap =
+
+                            // String runText = run.getText(0) == null ? "" : run.getText(0);
+
+                            // process replicate rows
+                            // table.removeRow(rowIndex);
+
+                            // reprocess table rows for regular merge tags
+
+                        }
+
+                    }
+
+                }
+                rowIndex++;
+
+            }
+        }
+        // reprocess cells for regular merge tags
+        tableRows = table.getRows();
+        if (tableRows != null) {
+            for (XWPFTableRow tableRow : tableRows) {
+                List<XWPFTableCell> tableCells = tableRow.getTableCells();
+                if (tableCells != null) {
+                    for (XWPFTableCell tableCell : tableCells) {
+                        List<XWPFParagraph> tableCellParagraphs = tableCell.getParagraphs();
+                        for (XWPFParagraph tableCellParagraph : tableCellParagraphs) {
+                            try {
+                                mergeTagInParagraph(tableCellParagraph, dataMap);
+
+                            } catch (Exception e) {
+                                // TODO: handle exception
+                                System.err.println("Error 2nd sweep paragraph: " + e.getMessage());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+    }
+
     private static void copyRunFormatting(XWPFRun sourceRun, XWPFRun targetRun) {
         targetRun.setFontFamily(sourceRun.getFontFamily());
         if (sourceRun.getFontSizeAsDouble() != null) {
@@ -158,7 +284,7 @@ public class Main {
 
     }
 
-    public static void mergeTagInParagraph(XWPFParagraph paragraph) {
+    public static void mergeTagInParagraph(XWPFParagraph paragraph, Map<String, Object> tagMap) {
         List<XWPFRun> runs = paragraph.getRuns();
         StringBuilder paragraphText = new StringBuilder();
         int tagStartIndex = -1;
@@ -180,7 +306,6 @@ public class Main {
 
         // Iterate through each match found in the paragraph
         while (matcher.find()) {
-            String tagWithBraces = matcher.group(0);
             String tagBody = matcher.group(1);
             String replacement = (String) getNestedValue(dataMap, tagBody); // Get replacement value.
 
@@ -283,5 +408,21 @@ public class Main {
                     currentKey);
             return null; // Path not found or intermediate level is not a map or list
         }
+    }
+
+    private static Object getNestedValueList(Map<String, Object> currentLevel, List<String> keys, int index) {
+        String currentKey = keys.get(index);
+        Object value = currentLevel.get(currentKey);
+        if (value == null) {
+            return null;
+        }
+        if (index == keys.size() - 1) {
+            return value;
+        } else if (value instanceof String) {
+            return getNestedValueList((Map<String, Object>) value, keys, index + 1);
+        } else {
+            return null;
+        }
+
     }
 }

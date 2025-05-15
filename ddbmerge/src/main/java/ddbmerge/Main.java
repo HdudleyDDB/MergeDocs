@@ -258,6 +258,19 @@ public class Main {
                 }
             }
         }
+        //reprocess table for regular merge values
+        tableRows = table.getRows();
+        for(XWPFTableRow tableRow: tableRows){
+            if(tableRow!= null){
+                for(XWPFTableCell tableCell: tableRow.getTableCells()){
+                    if(tableCell != null){
+                        for(XWPFParagraph cellParagraph : tableCell.getParagraphs()){
+                            mergeTagInParagraph(cellParagraph, dataMap);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private static void copyRunFormatting(XWPFRun sourceRun, XWPFRun targetRun) {

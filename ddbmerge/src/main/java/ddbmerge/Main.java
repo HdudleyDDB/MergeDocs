@@ -26,7 +26,7 @@ public class Main {
     public static Map<String, Object> dataMap;
 
     public static void main(String[] args) {
-        String inputFilePath = "TestMerge.docx";
+        String inputFilePath = "LTR- Disc Req to Client.docx";
         String outputFilePath = "output_merged.docx";
         dataMap = new HashMap<>();
         String json = "{" +
@@ -63,6 +63,7 @@ public class Main {
                 "        \"Email\": \"mdudley@dudleydebosier.com\"" +
                 "      }" +
                 "    }," +
+                " \"Today\": \"2025-05-04\"," +
                 "    \"Medical_Provider\": {" +
                 "      \"Name\": \"Ochsner Health\"" +
                 "    }," +
@@ -158,118 +159,144 @@ public class Main {
     }
 
     private static void processTable(XWPFTable table) {
-        List<XWPFTableRow> tableRows = new ArrayList<>(table.getRows()); // Create a copy!
-        Boolean deleteRow = false;
+        List<XWPFTableRow> tableRows = new ArrayList<>(table.getRows());
         Map<Integer, List<XWPFTableRow>> tableRowsToAdd = new HashMap<>();
-        List<Integer> rowsToDelete = new ArrayList<>(); // Store indices of rows to delete
+        List<Integer> rowsToDelete = new ArrayList<>();
 
-        // look for replication values
         if (tableRows != null) {
             int rowIndex = 0;
-            int numCells = 0;
-            if (tableRows.size() > 0) {
-                numCells = tableRows.get(0).getTableCells().size();
-            }
-
             for (XWPFTableRow tableRow : tableRows) {
                 List<XWPFTableCell> tableCells = tableRow.getTableCells();
-                if (tableCells != null) {
+                boolean replicateRow = false;
+                if (tableCells != null && !tableCells.isEmpty()) {
                     XWPFTableCell firstCell = tableCells.get(0);
                     List<XWPFParagraph> firstCellParagraphs = firstCell.getParagraphs();
-                    if (firstCellParagraphs != null) {
+                    if (firstCellParagraphs != null && !firstCellParagraphs.isEmpty()) {
                         XWPFParagraph firstCellParagraph = firstCellParagraphs.get(0);
-                        StringBuilder cellText = new StringBuilder();
-                        for (XWPFRun run : firstCellParagraph.getRuns()) {
-                            cellText.append(run.getText(0));
-                        }
-                        System.out.println("First Cell Text: " + cellText.toString());
-                        // search for replicate row tag
-                        Pattern pattern = Pattern.compile("\\{\\{startRow.(.*?)\\}\\}");
-                        Matcher matcher = pattern.matcher(cellText.toString());
+                        String paragraphText = firstCellParagraph.getText();
+                        Pattern pattern = Pattern.compile("\\{\\{startRow\\.(.*?)\\}\\}");
+                        Matcher matcher = pattern.matcher(paragraphText);
+
+                        List<Runnable> deferredReplacements = new ArrayList<>();
+
                         while (matcher.find()) {
+                            replicateRow = true;
                             String startRowKey = matcher.group(1);
                             if (startRowKey != null) {
                                 List<XWPFTableRow> rowsToAdd = new ArrayList<>();
                                 List<Map<String, Object>> repeatMap = (List<Map<String, Object>>) getNestedValueList(
                                         dataMap,
                                         Arrays.asList(startRowKey.split("\\.")), 0);
-                                // loop over the map results
+
                                 if (repeatMap != null) {
                                     for (Map<String, Object> listMap : repeatMap) {
-                                        System.out.println("Current Map: " + listMap);
                                         org.openxmlformats.schemas.wordprocessingml.x2006.main.CTRow ctRow = null;
                                         try {
-                                            ctRow = org.openxmlformats.schemas.wordprocessingml.x2006.main.CTRow.Factory.parse(tableRow.getCtRow().newInputStream());
-                                        } catch (Exception e){System.err.println("Error converting to ctrow: " + e.getMessage());}
-                                        XWPFTableRow newTableRow  = new XWPFTableRow(ctRow, table);
-                                        //process row cell values
-                                        for(XWPFTableCell replicateTableCell : newTableRow.getTableCells()){
-                                            if (replicateTableCell != null){
-                                                try {
-                                                    //process cell paragaphs
-                                                    for(XWPFParagraph cellParagraph: replicateTableCell.getParagraphs()){
-                                                        System.out.println("Paragraph text: "+ cellParagraph.getText());
-                                                        System.out.println("list map: " + listMap);
-                                                        mergeTagInParagraph(cellParagraph, listMap);
-
-                                                    }
-                                                } catch (Exception e) {
-                                                    System.err.println("Error looping through table cell paragraphs"                                                );
+                                            ctRow = org.openxmlformats.schemas.wordprocessingml.x2006.main.CTRow.Factory
+                                                    .parse(tableRow.getCtRow().newInputStream());
+                                        } catch (Exception e) {
+                                            System.err.println("Error converting to ctrow: " + e.getMessage());
+                                        }
+                                        XWPFTableRow newTableRow = new XWPFTableRow(ctRow, table);
+                                        for (XWPFTableCell replicateTableCell : newTableRow.getTableCells()) {
+                                            if (replicateTableCell != null) {
+                                                for (XWPFParagraph cellParagraph : replicateTableCell.getParagraphs()) {
+                                                    mergeTagInParagraph(cellParagraph, listMap);
                                                 }
                                             }
-
                                         }
                                         rowsToAdd.add(newTableRow);
                                     }
                                     tableRowsToAdd.put(rowIndex, rowsToAdd);
                                 }
                             }
-                            deleteRow = true;
+
+                            // Create a deferred action to remove the tag
+                            int start = matcher.start();
+                            int end = matcher.end();
+                            deferredReplacements.add(() -> replaceTextRange(firstCellParagraph, start, end, ""));
+                        }
+
+                        // Execute deferred replacements *after* the loop to avoid index issues
+                        for (Runnable replacement : deferredReplacements) {
+                            replacement.run();
                         }
                     }
                 }
-                if (deleteRow) {
-                    rowsToDelete.add(rowIndex); // Add to the list of rows to delete
-                    deleteRow = false;
+
+                if (replicateRow) {
+                    rowsToDelete.add(rowIndex);
                 }
                 rowIndex++;
             }
-        }
 
-        // Delete rows *after* the iteration is complete
-        for (int i = rowsToDelete.size() - 1; i >= 0; i--) {
-            table.removeRow(rowsToDelete.get(i));
-        }
-        // add rows to Table
-        for (Integer indexInteger : tableRowsToAdd.keySet()) {
-            List<XWPFTableRow> rowsToAdd = tableRowsToAdd.get(indexInteger);
-            if (rowsToAdd != null) {
-                for (XWPFTableRow newRow : rowsToAdd) {
+            // Delete original rows
+            for (int i = rowsToDelete.size() - 1; i >= 0; i--) {
+                table.removeRow(rowsToDelete.get(i));
+            }
+
+            // Add new rows
+            for (Integer indexInteger : tableRowsToAdd.keySet()) {
+                List<XWPFTableRow> rowsToAdd = tableRowsToAdd.get(indexInteger);
+                if (rowsToAdd != null) {
+                    for (XWPFTableRow newRow : rowsToAdd) {
                         try {
-                            // create new table in document
-            
-                            table.addRow(newRow, indexInteger );
-
+                            table.addRow(newRow, indexInteger);
                         } catch (Exception e) {
                             System.err.println("Error adding row: " + e);
-                        }
-                    
-
-                }
-            }
-        }
-        //reprocess table for regular merge values
-        tableRows = table.getRows();
-        for(XWPFTableRow tableRow: tableRows){
-            if(tableRow!= null){
-                for(XWPFTableCell tableCell: tableRow.getTableCells()){
-                    if(tableCell != null){
-                        for(XWPFParagraph cellParagraph : tableCell.getParagraphs()){
-                            mergeTagInParagraph(cellParagraph, dataMap);
                         }
                     }
                 }
             }
+
+            // Re-process the table for other merge tags in the newly added rows
+            for (XWPFTableRow tableRow : table.getRows()) {
+                for (XWPFTableCell tableCell : tableRow.getTableCells()) {
+                    for (XWPFParagraph cellParagraph : tableCell.getParagraphs()) {
+                        mergeTagInParagraph(cellParagraph, dataMap);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void replaceTextRange(XWPFParagraph paragraph, int start, int end, String replacement) {
+        String paragraphText = paragraph.getText();
+        if (start >= 0 && end <= paragraphText.length() && start <= end) {
+            int currentPos = 0;
+            List<XWPFRun> runsToRemove = new ArrayList<>();
+            List<XWPFRun> runs = paragraph.getRuns();
+
+            for (int i = 0; i < runs.size(); i++) {
+                XWPFRun run = runs.get(i);
+                String runText = run.getText(0) == null ? "" : run.getText(0);
+                int runStart = currentPos;
+                int runEnd = currentPos + runText.length();
+
+                if (runEnd > start && runStart < end) {
+                    runsToRemove.add(run);
+                }
+                currentPos = runEnd;
+            }
+
+            // Remove the identified runs
+            for (XWPFRun run : runsToRemove) {
+                paragraph.removeRun(paragraph.getRuns().indexOf(run));
+            }
+
+            // Insert the replacement text if needed
+            if (!replacement.isEmpty()) {
+                XWPFRun newRun = paragraph.createRun();
+                newRun.setText(replacement);
+            }
+
+            // Re-set the paragraph text to reflect the changes (important for internal
+            // state)
+            StringBuilder sb = new StringBuilder();
+            for (XWPFRun run : paragraph.getRuns()) {
+                sb.append(run.getText(0) == null ? "" : run.getText(0));
+            }
+            paragraph.getCTP().addNewR(); // Trigger a re-evaluation of the text
         }
     }
 
@@ -372,7 +399,12 @@ public class Main {
     // Process standard tags
     public static Object getNestedValue(Map<String, Object> data, String path) {
         List<String> keys = Arrays.asList(path.split("\\."));
-        return getNestedValueRecursive(data, keys, 0, path);
+        if (keys.contains("startRow")) {
+            return "";
+        } else {
+            return getNestedValueRecursive(data, keys, 0, path);
+
+        }
     }
 
     private static Object getNestedValueRecursive(Map<String, Object> currentLevel, List<String> keys, int index,

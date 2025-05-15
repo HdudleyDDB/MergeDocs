@@ -1,6 +1,9 @@
 package ddbmerge;
 
 import org.apache.poi.xwpf.usermodel.*;
+import org.apache.xmlbeans.XmlException;
+import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTRow;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
@@ -155,10 +158,19 @@ public class Main {
     }
 
     private static void processTable(XWPFTable table) {
-        List<XWPFTableRow> tableRows = table.getRows();
+        List<XWPFTableRow> tableRows = new ArrayList<>(table.getRows()); // Create a copy!
+        Boolean deleteRow = false;
+        Map<Integer, List<XWPFTableRow>> tableRowsToAdd = new HashMap<>();
+        List<Integer> rowsToDelete = new ArrayList<>(); // Store indices of rows to delete
+
         // look for replication values
         if (tableRows != null) {
             int rowIndex = 0;
+            int numCells = 0;
+            if (tableRows.size() > 0) {
+                numCells = tableRows.get(0).getTableCells().size();
+            }
+
             for (XWPFTableRow tableRow : tableRows) {
                 List<XWPFTableCell> tableCells = tableRow.getTableCells();
                 if (tableCells != null) {
@@ -172,101 +184,63 @@ public class Main {
                         }
                         System.out.println("First Cell Text: " + cellText.toString());
                         // search for replicate row tag
-
                         Pattern pattern = Pattern.compile("\\{\\{startRow.(.*?)\\}\\}");
                         Matcher matcher = pattern.matcher(cellText.toString());
                         while (matcher.find()) {
-                            int tagStartIndex = -1;
-                            int tagEndIndex = -1;
-                            int firstTagRunIndex = -1;
-                            int lastTagRunIndex = -1;
-                            // run matcher to get the row
-                            String startRowKey = null;
-                            startRowKey = matcher.group(1);
+                            String startRowKey = matcher.group(1);
                             if (startRowKey != null) {
                                 List<XWPFTableRow> rowsToAdd = new ArrayList<>();
-                                List<String> repeatKeys = Arrays.asList(startRowKey.split("\\."));
                                 List<Map<String, Object>> repeatMap = (List<Map<String, Object>>) getNestedValueList(
                                         dataMap,
-                                        repeatKeys, 0);
-                                // working up to this point
-
-                                // loop over the list to get the map of values and add to row
-                                for (Map<String, Object> repeatMapEntry : repeatMap) {
-                                    XWPFTableRow rowToCreate = tableRow;
-                                    // loop over table row cells to replace values
-                                    for (XWPFTableCell replciateRowCell : rowToCreate.getTableCells()) {
-                                        // loop over table row cell paragraphs and merge values
-                                        for (XWPFParagraph replicateRowCellParagraph : replciateRowCell
-                                                .getParagraphs()) {
-                                            mergeTagInParagraph(replicateRowCellParagraph, repeatMapEntry);
-                                        }
+                                        Arrays.asList(startRowKey.split("\\.")), 0);
+                                // loop over the map results
+                                if (repeatMap != null) {
+                                    for (Map<String, Object> listMap : repeatMap) {
+                                        System.out.println("Current Map: " + listMap);
+                                        org.openxmlformats.schemas.wordprocessingml.x2006.main.CTRow ctRow = null;
+                                        try {
+                                            ctRow = org.openxmlformats.schemas.wordprocessingml.x2006.main.CTRow.Factory.parse(tableRow.getCtRow().newInputStream());
+                                        } catch (Exception e){System.err.println("Error converting to ctrow: " + e.getMessage());}
+                                        XWPFTableRow newTableRow  = new XWPFTableRow(ctRow, table);
+                                        rowsToAdd.add(newTableRow);
                                     }
-                                    rowsToAdd.add(rowToCreate);
-
+                                    tableRowsToAdd.put(rowIndex, rowsToAdd);
                                 }
-
-                                // List<Map<String,Object>> listMap = dataMap.get()
-
-                                System.out.println("Found Start Tag: " + startRowKey);
-                                System.out.println("Row index at removal " + rowIndex);
-                                // remove template replicate row
-                                table.removeRow(rowIndex);
-
-                                // reversely add row (maintain sort order)
-                                // for (int i = rowsToAdd.size() - 1; i >= 0; i--) {
-                                // try {
-                                // table.addRow(tableRow, rowIndex);
-
-                                // } catch (Exception e) {
-                                // // TODO: handle exception
-                                // System.err.println("Error adding rows: " + e.getMessage());
-                                // }
-
-                                // }
-
                             }
-                            // String rowMapKey = dataMap.get()
-                            // Map<String, Object> rowMap =
-
-                            // String runText = run.getText(0) == null ? "" : run.getText(0);
-
-                            // process replicate rows
-                            // table.removeRow(rowIndex);
-
-                            // reprocess table rows for regular merge tags
-
+                            deleteRow = true;
                         }
-
                     }
-
+                }
+                if (deleteRow) {
+                    rowsToDelete.add(rowIndex); // Add to the list of rows to delete
+                    deleteRow = false;
                 }
                 rowIndex++;
-
             }
         }
-        // reprocess cells for regular merge tags
-        tableRows = table.getRows();
-        if (tableRows != null) {
-            for (XWPFTableRow tableRow : tableRows) {
-                List<XWPFTableCell> tableCells = tableRow.getTableCells();
-                if (tableCells != null) {
-                    for (XWPFTableCell tableCell : tableCells) {
-                        List<XWPFParagraph> tableCellParagraphs = tableCell.getParagraphs();
-                        for (XWPFParagraph tableCellParagraph : tableCellParagraphs) {
-                            try {
-                                mergeTagInParagraph(tableCellParagraph, dataMap);
 
-                            } catch (Exception e) {
-                                // TODO: handle exception
-                                System.err.println("Error 2nd sweep paragraph: " + e.getMessage());
-                            }
+        // Delete rows *after* the iteration is complete
+        for (int i = rowsToDelete.size() - 1; i >= 0; i--) {
+            table.removeRow(rowsToDelete.get(i));
+        }
+        // add rows to Table
+        for (Integer indexInteger : tableRowsToAdd.keySet()) {
+            List<XWPFTableRow> rowsToAdd = tableRowsToAdd.get(indexInteger);
+            if (rowsToAdd != null) {
+                for (XWPFTableRow newRow : rowsToAdd) {
+                        try {
+                            // create new table in document
+            
+                            table.addRow(newRow, indexInteger );
+
+                        } catch (Exception e) {
+                            System.err.println("Error adding row: " + e);
                         }
-                    }
+                    
+
                 }
             }
         }
-
     }
 
     private static void copyRunFormatting(XWPFRun sourceRun, XWPFRun targetRun) {

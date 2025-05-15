@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -317,82 +318,80 @@ public class Main {
 
     public static void mergeTagInParagraph(XWPFParagraph paragraph, Map<String, Object> tagMap) {
         List<XWPFRun> runs = paragraph.getRuns();
-        StringBuilder paragraphText = new StringBuilder();
-        int tagStartIndex = -1;
-        int tagEndIndex = -1;
-        int firstTagRunIndex = -1;
-        int lastTagRunIndex = -1;
-        Pattern pattern = Pattern.compile("\\{\\{(.*?)\\}\\}"); // Correct Pattern
-        Matcher matcher = null;
+        if (runs == null || runs.isEmpty())
+            return;
 
-        // Build the complete paragraph text first. This is crucial for correct
-        // matching.
-        for (XWPFRun run : runs) {
-            String runText = run.getText(0) == null ? "" : run.getText(0);
-            paragraphText.append(runText);
+        StringBuilder fullText = new StringBuilder();
+        List<RunInfo> runInfoList = new ArrayList<>();
+        int currentPos = 0;
+
+        for (int i = 0; i < runs.size(); i++) {
+            String text = runs.get(i).getText(0);
+            if (text == null)
+                continue;
+
+            fullText.append(text);
+            runInfoList.add(new RunInfo(i, currentPos, currentPos + text.length(), text));
+            currentPos += text.length();
         }
-        String paragraphTextStr = paragraphText.toString(); // Store as String for efficiency
 
-        matcher = pattern.matcher(paragraphTextStr); // Create matcher with full text
+        String paragraphStr = fullText.toString();
+        Pattern pattern = Pattern.compile("\\{\\{(.*?)\\}\\}");
+        Matcher matcher = pattern.matcher(paragraphStr);
 
-        // Iterate through each match found in the paragraph
+        List<TagMatch> matches = new ArrayList<>();
+
         while (matcher.find()) {
-            String tagBody = matcher.group(1);
-            String replacement = (String) getNestedValue(tagMap, tagBody); // Get replacement value.
-            System.out.println("Replacement tag: " + replacement);
-            tagStartIndex = matcher.start();
-            tagEndIndex = matcher.end();
+            String tag = matcher.group(1);
+            int tagStart = matcher.start();
+            int tagEnd = matcher.end();
 
-            // Find the runs that contain the tag. This logic is now correct.
-            firstTagRunIndex = 0;
-            int currentRunLength = 0;
-            for (int i = 0; i < runs.size(); i++) {
-                XWPFRun run = runs.get(i);
-                String runText = run.getText(0) == null ? "" : run.getText(0);
-                int runTextLength = runText.length();
-
-                if (tagStartIndex >= currentRunLength && tagStartIndex < currentRunLength + runTextLength) {
-                    firstTagRunIndex = i;
-                    break; // Found the first run
+            int startRun = -1, endRun = -1;
+            for (RunInfo info : runInfoList) {
+                if (startRun == -1 && tagStart >= info.start && tagStart < info.end) {
+                    startRun = info.index;
                 }
-                currentRunLength += runTextLength;
-            }
-
-            lastTagRunIndex = runs.size() - 1;
-            currentRunLength = paragraphTextStr.length();
-            for (int i = runs.size() - 1; i >= 0; i--) {
-                XWPFRun run = runs.get(i);
-                String runText = run.getText(0) == null ? "" : run.getText(0);
-                int runTextLength = runText.length();
-                currentRunLength -= runTextLength;
-                if (tagEndIndex > currentRunLength && tagEndIndex <= currentRunLength + runTextLength) {
-                    lastTagRunIndex = i;
-                    break;
+                if (tagEnd > info.start && tagEnd <= info.end) {
+                    endRun = info.index;
                 }
             }
-            // Store formatting of the first run.
-            XWPFRun formattingSourceRun = runs.get(firstTagRunIndex);
 
-            // Create a new run for the replacement.
-            XWPFRun replacementRun = paragraph.createRun();
-            copyRunFormatting(formattingSourceRun, replacementRun); // Copy formatting
-            replacementRun.setText(replacement);
+            if (startRun != -1 && endRun != -1) {
+                matches.add(new TagMatch(tag, tagStart, tagEnd, startRun, endRun));
+            }
+        }
 
-            // Remove the runs containing the tag, in reverse order to avoid index issues.
-            for (int i = lastTagRunIndex; i >= firstTagRunIndex; i--) {
+        // Process in reverse to safely remove runs
+        Collections.reverse(matches);
+
+        for (TagMatch match : matches) {
+            Object value = getNestedValue(tagMap, match.tag);
+            String replacement = value != null ? value.toString() : "";
+
+            // Update first run's text
+            XWPFRun firstRun = paragraph.getRuns().get(match.startRun);
+            String originalText = firstRun.getText(0);
+            int startOffset = match.startChar - runInfoList.get(match.startRun).start;
+            String prefix = originalText.substring(0, startOffset);
+            String suffix = "";
+
+            if (match.startRun == match.endRun) {
+                int endOffset = match.endChar - runInfoList.get(match.endRun).start;
+                suffix = originalText.substring(endOffset);
+            } else {
+                // Tag ends in another run — handle suffix in that run
+                XWPFRun endRun = paragraph.getRuns().get(match.endRun);
+                String endText = endRun.getText(0);
+                int endOffset = match.endChar - runInfoList.get(match.endRun).start;
+                suffix = endText.substring(endOffset);
+            }
+
+            firstRun.setText(prefix + replacement + suffix, 0);
+
+            // Remove intermediate runs
+            for (int i = match.endRun; i > match.startRun; i--) {
                 paragraph.removeRun(i);
             }
-            // Insert the replacement run.
-            paragraph.insertNewRun(firstTagRunIndex);
-            runs = paragraph.getRuns();
-            try {
-                runs.set(firstTagRunIndex, replacementRun);
-
-            } catch (Exception e) {
-                // TODO: handle exception
-                System.err.println("error setting replacement run " + e.getMessage());
-            }
-
         }
     }
 
@@ -461,4 +460,31 @@ public class Main {
         }
 
     }
+
+    static class RunInfo {
+        int index, start, end;
+        String text;
+
+        RunInfo(int index, int start, int end, String text) {
+            this.index = index;
+            this.start = start;
+            this.end = end;
+            this.text = text;
+        }
+    }
+
+    static class TagMatch {
+        String tag;
+        int startChar, endChar;
+        int startRun, endRun;
+
+        TagMatch(String tag, int startChar, int endChar, int startRun, int endRun) {
+            this.tag = tag;
+            this.startChar = startChar;
+            this.endChar = endChar;
+            this.startRun = startRun;
+            this.endRun = endRun;
+        }
+    }
+
 }

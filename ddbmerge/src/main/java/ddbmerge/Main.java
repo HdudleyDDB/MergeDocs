@@ -202,6 +202,23 @@ public class Main {
                                             ctRow = org.openxmlformats.schemas.wordprocessingml.x2006.main.CTRow.Factory.parse(tableRow.getCtRow().newInputStream());
                                         } catch (Exception e){System.err.println("Error converting to ctrow: " + e.getMessage());}
                                         XWPFTableRow newTableRow  = new XWPFTableRow(ctRow, table);
+                                        //process row cell values
+                                        for(XWPFTableCell replicateTableCell : newTableRow.getTableCells()){
+                                            if (replicateTableCell != null){
+                                                try {
+                                                    //process cell paragaphs
+                                                    for(XWPFParagraph cellParagraph: replicateTableCell.getParagraphs()){
+                                                        System.out.println("Paragraph text: "+ cellParagraph.getText());
+                                                        System.out.println("list map: " + listMap);
+                                                        mergeTagInParagraph(cellParagraph, listMap);
+
+                                                    }
+                                                } catch (Exception e) {
+                                                    System.err.println("Error looping through table cell paragraphs"                                                );
+                                                }
+                                            }
+
+                                        }
                                         rowsToAdd.add(newTableRow);
                                     }
                                     tableRowsToAdd.put(rowIndex, rowsToAdd);
@@ -281,8 +298,8 @@ public class Main {
         // Iterate through each match found in the paragraph
         while (matcher.find()) {
             String tagBody = matcher.group(1);
-            String replacement = (String) getNestedValue(dataMap, tagBody); // Get replacement value.
-
+            String replacement = (String) getNestedValue(tagMap, tagBody); // Get replacement value.
+            System.out.println("Replacement tag: " + replacement);
             tagStartIndex = matcher.start();
             tagEndIndex = matcher.end();
 

@@ -21,7 +21,7 @@ import java.util.HashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 // import java.text.SimpleDateFormat;
-// import java.util.Date;
+import java.util.Date;
 
 public class Main {
     public static Map<String, Object> dataMap;
@@ -41,6 +41,7 @@ public class Main {
                 "  \"data\": {" +
                 "    \"Matter\": {" +
                 "      \"Status\": \"Open\"," +
+                "       \"Amount\": 193.13,"+
                 "       \"Client\": {\"Birthday\": \"2024-01-01\"}," +
                 "      \"Handling_attorney\": {" +
                 "        \"Name\": \"Handling ATORNEY\"," +
@@ -316,7 +317,7 @@ public class Main {
 
     }
 
-    public static void mergeTagInParagraph(XWPFParagraph paragraph, Map<String, Object> tagMap) {
+     public static void mergeTagInParagraph(XWPFParagraph paragraph, Map<String, Object> tagMap) {
         List<XWPFRun> runs = paragraph.getRuns();
         if (runs == null || runs.isEmpty())
             return;
@@ -336,37 +337,37 @@ public class Main {
         }
 
         String paragraphStr = fullText.toString();
-        Pattern pattern = Pattern.compile("\\{\\{(.*?)\\}\\}");
-        Matcher matcher = pattern.matcher(paragraphStr);
+Pattern pattern = Pattern.compile("\\{\\{(.*?)(?::(.*?))?\\}\\}"); // {{tag[:format]}}
+Matcher matcher = pattern.matcher(paragraphStr);
+List<TagMatch> matches = new ArrayList<>();
 
-        List<TagMatch> matches = new ArrayList<>();
+while (matcher.find()) {
+    String tag = matcher.group(1).trim();
+    String format = matcher.group(2) != null ? matcher.group(2).trim() : null;
+    int tagStart = matcher.start();
+    int tagEnd = matcher.end();
 
-        while (matcher.find()) {
-            String tag = matcher.group(1);
-            int tagStart = matcher.start();
-            int tagEnd = matcher.end();
-
-            int startRun = -1, endRun = -1;
-            for (RunInfo info : runInfoList) {
-                if (startRun == -1 && tagStart >= info.start && tagStart < info.end) {
-                    startRun = info.index;
-                }
-                if (tagEnd > info.start && tagEnd <= info.end) {
-                    endRun = info.index;
-                }
-            }
-
-            if (startRun != -1 && endRun != -1) {
-                matches.add(new TagMatch(tag, tagStart, tagEnd, startRun, endRun));
-            }
+    int startRun = -1, endRun = -1;
+    for (RunInfo info : runInfoList) {
+        if (startRun == -1 && tagStart >= info.start && tagStart < info.end) {
+            startRun = info.index;
         }
+        if (tagEnd > info.start && tagEnd <= info.end) {
+            endRun = info.index;
+        }
+    }
+
+    if (startRun != -1 && endRun != -1) {
+        matches.add(new TagMatch(tag, format, tagStart, tagEnd, startRun, endRun));
+    }
+}
 
         // Process in reverse to safely remove runs
         Collections.reverse(matches);
 
         for (TagMatch match : matches) {
             Object value = getNestedValue(tagMap, match.tag);
-            String replacement = value != null ? value.toString() : "";
+String replacement = formatValue(value, match.format);
 
             // Update first run's text
             XWPFRun firstRun = paragraph.getRuns().get(match.startRun);
@@ -379,7 +380,6 @@ public class Main {
                 int endOffset = match.endChar - runInfoList.get(match.endRun).start;
                 suffix = originalText.substring(endOffset);
             } else {
-                // Tag ends in another run — handle suffix in that run
                 XWPFRun endRun = paragraph.getRuns().get(match.endRun);
                 String endText = endRun.getText(0);
                 int endOffset = match.endChar - runInfoList.get(match.endRun).start;
@@ -473,18 +473,56 @@ public class Main {
         }
     }
 
-    static class TagMatch {
-        String tag;
-        int startChar, endChar;
-        int startRun, endRun;
+static class TagMatch {
+    String tag;
+    String format; // optional
+    int startChar;
+    int endChar;
+    int startRun;
+    int endRun;
 
-        TagMatch(String tag, int startChar, int endChar, int startRun, int endRun) {
-            this.tag = tag;
-            this.startChar = startChar;
-            this.endChar = endChar;
-            this.startRun = startRun;
-            this.endRun = endRun;
-        }
+    TagMatch(String tag, String format, int startChar, int endChar, int startRun, int endRun) {
+        this.tag = tag;
+        this.format = format;
+        this.startChar = startChar;
+        this.endChar = endChar;
+        this.startRun = startRun;
+        this.endRun = endRun;
     }
+}
+public static String formatValue(Object value, String format) {
+    if (value == null || format == null) return value != null ? value.toString() : "";
+
+    try {
+        if (value instanceof Date) {
+            return new java.text.SimpleDateFormat(format).format((Date) value);
+        } else if (value instanceof Number) {
+            return new java.text.DecimalFormat(format).format(value);
+        } else if (value instanceof String) {
+            try {
+    // Try ISO 8601 format first
+    Date parsedDate = new java.text.SimpleDateFormat("yyyy-MM-dd").parse((String) value);
+    return new java.text.SimpleDateFormat(format).format(parsedDate);
+} catch (Exception ignore) {
+    // Fallback to default parsing
+    try {
+        Date parsedDate = java.text.DateFormat.getDateInstance().parse((String) value);
+        return new java.text.SimpleDateFormat(format).format(parsedDate);
+    } catch (Exception ignore2) {}
+}
+
+            try {
+                double num = Double.parseDouble((String) value);
+                return new java.text.DecimalFormat(format).format(num);
+            } catch (Exception ignore) {}
+        }
+    } catch (Exception e) {
+        // fallback if formatting fails
+    }
+
+    return value.toString();
+}
+
+
 
 }
